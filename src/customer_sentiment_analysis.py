@@ -2,10 +2,6 @@
 # PROJECT OVERVIEW
 #======================================================================================================
 #
-# ShopEase is a fast-growing e-commerce company operating across the  united Kingdom, France, Germany,
-# and Spain. With a large and growing volume of customer reviews, support requests, and social media 
-# feedback, manually analysing customer sentiment has become increasingly challeging.
-#
 # This project aims to develop a multilingual sentiment analysis solution that automatically processes 
 # customer feedback, classifies sentiment as positive, neutral, or negative, and identifies the key 
 # drivers of customer satisfation and dissatisfaction. The solution will leverage Natural Language 
@@ -29,29 +25,13 @@ import missingno as msno # used for missing value visualisation
 from cleantext import clean
 from ftlangdetect import detect
 import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-
-#=====================================================================================================
-# %%
-# Load NLP Models
-# #=====================================================================================================
-nlp_en = spacy.load('en_core_web_sm')
-nlp_fr = spacy.load('fr_core_news_sm')
-nlp_de = spacy.load('de_core_news_sm')
-nlp_es = spacy.load('es_core_news_sm')
-
-# Create the language model dictionary
-language_models = {
-    'en': nlp_en,
-    'fr': nlp_fr,
-    'de': nlp_de,
-    'es': nlp_es
-}
 #=====================================================================================================
 # %%
 # DATA LOADING AND INITIAL INSPECTION
 #=====================================================================================================
-df = pd.read_csv('../data/raw_reviews.csv')
+df = pd.read_csv('../data/amazon_reviews_cleaned.csv')
 
 # View first five rows of data
 print(df.head())
@@ -70,35 +50,39 @@ print(df.info())
 unique_sentiments = df['sentiment'].value_counts()
 print(unique_sentiments)
 
+# %%
+# Number of unique sentiments
 total_unique_sentiments = len(unique_sentiments)
 print(total_unique_sentiments)
 
+# %%
 # Check for missing value
 print(df.isnull().sum())
+missing_records = df.isnull().sum().sum()
 
-# Assign missing review and missing ratings variable names
-missing_reviews = df['review'].isnull().sum()
-missing_ratings = df['rating'].isnull().sum()
-
+# %%
 # Check for duplicates
 total_duplicates = df.duplicated().sum()
 print(total_duplicates)
 
+# %%
 # Check for invalid ratings
 invalid_ratings = df[(df['rating'] < 1) |
                      (df['rating'] > 5)
                      ].shape[0]
 print(invalid_ratings)
 
-# Check country inconsistencies
+# %%
+# Check country inconsistencies and number of countries
 unique_countries = df['country'].unique()
 print(unique_countries)
 
 # Number of unique countries
-total_unique_countries = len(unique_countries)
+total_unique_countries = df['country'].nunique()
 print(total_unique_countries)
 
-# Check product category inconsistencies
+# %%
+# Check product category inconsistencies and number of products
 unique_products = df['product_category'].unique()
 print(unique_products)
 
@@ -106,6 +90,7 @@ print(unique_products)
 total_unique_products = len(unique_products)
 print(total_unique_products)
 
+# %%
 # Create data dictionaries of original dataset before any preprocessing
 # First create the dictionary of the dataset columns and data type
 data_dictionary_initial = pd.DataFrame({
@@ -116,28 +101,29 @@ data_dictionary_initial = pd.DataFrame({
 # Add the description to the created data dictionary
 data_dictionary_initial['Description'] = [
         'Unique identifier for each review',
-        'Customer review text',
-        'Customer rating',
+        'Categories of products being reviewed',
+        'Date and time review was submitted',
         'ISO country code',
-        'Product category',
+        'Customer rating',
+        'Customer review text',
         'Sentiment label',
-        'Date and time review was submitted'
+        
     ]
 
-print('data_dictionary_initial')
+print(data_dictionary_initial)
 
 # Save data dictionary as excel
 data_dictionary_initial.to_excel('../outputs/data_dictionary_initial.xlsx',
                                 index=False)
 
+# %%
 # Create Quality Summary Table
 quality_summary = pd.DataFrame({
     'Quality Check':[
         'Total Columns',
         'Total Records',
         'Unique Sentiments',
-        'Missing Reviews',
-        'Missing Ratings',
+        'Missing Records',
         'Total Duplicates',
         'Invalid Ratings',
         'Total Unique Countries',
@@ -147,9 +133,8 @@ quality_summary = pd.DataFrame({
         total_columns,
         total_records,
         total_unique_sentiments,
+        missing_records,
         total_duplicates,
-        missing_reviews,
-        missing_ratings,
         invalid_ratings,
         total_unique_countries,
         total_unique_products
@@ -163,11 +148,11 @@ quality_summary.to_excel('../outputs/quality_summary.xlsx',
                        index=False)
 #------------------------------------------------------------------------------------------------------
 # Data Quality Summary:
-# The dataset contains 12,000 records and 7 variables with no missing reviews, missing ratings, 
-# duplicate records, or invalid ratings. Sentiment labels are consistent across three classes, and 
-# country values are standardized using ISO country codes. While the project focuses on four core markets, 
-# the dataset includes reviews from 14 countries, suggesting a wider international customer base. Overall, 
-# minimal data cleaning is required before proceeding to language detection and text preprocessing.
+# The dataset contains 21,055 records and 7 variables with one missing record in the country feature only.
+# Sentiment labels are consistent across three classes, and country values are standardized using ISO 
+# country codes. The dataset includes reviews from 148 countries, suggesting a wider international 
+# customer base. Overall, minimal data cleaning is required before proceeding to language detection 
+# and text preprocessing.
 #------------------------------------------------------------------------------------------------------
 
 #======================================================================================================
@@ -176,16 +161,15 @@ quality_summary.to_excel('../outputs/quality_summary.xlsx',
 #======================================================================================================
 # Create a copy of the dataset
 df_clean = df.copy()
-
+# %%
 # Convert timestamp from string to datetime format
-df_clean['timestamp'] = pd.to_datetime(df_clean['timestamp'])
+df_clean['timestamp'] = pd.to_datetime(
+    df_clean['timestamp'], format='ISO8601')
 
 # Check conversion
 print(df_clean['timestamp'].dtype)
 
-# View first five records
-print(df_clean.head())
-
+# %%
 # Check review feature thoroughly for any strange charracters
 print(df_clean['review'].sample(50, random_state=42))
 
@@ -205,7 +189,7 @@ print(sample)
 
 #======================================================================================================
 # %%
-# MULTILINGUAL LANGUAGE DETECTION
+# MULTILINGUAL LANGUAGE DETECTION and RECLASSIFICATION
 #======================================================================================================
 # Create a language detection function containing error handling incase the language of a review is unknown
 
@@ -223,81 +207,188 @@ def detect_language(text):
 # Tag each review with its language by creating a new column of language in the dataset
 df_clean['language'] = df_clean['review'].apply(detect_language)
 
-# Confirm language column creation
-print(df_clean[['review', 'language']].sample(10, random_state=42))
 
-# Calculate and view language distribution
+# %%
+# View initial language distribution
 language_count = df_clean['language'].value_counts()
+print(language_count)
 
+# %%
 # Calculate the percentage distribution of language
-language_percentages = ((language_count/len(df_clean))*100).round(2)
+language_percentages = ((language_count/len(df_clean))*100).round(3)
 print(language_percentages)
 
+# %%
+# Manual validation of  detected languages - by viewing random samples of reviews for each detected language
+# Create function for viewing samples of reviews in detected language
+def view_review_samples(df, lang, col1, col2, num):
+
+    available = len(df[df[col1]==lang])
+
+    sample = df.loc[df[col1]==lang,
+                    col2].sample(min(num, available), random_state=42)
+    return sample
+
+# Create a list of the detected languages
+langs = df_clean['language'].unique().tolist()
+
+# Call the function to view review samples
+for lang in langs:
+    print(f"\nReviews in {lang}")
+    sample = view_review_samples(df_clean, lang, 'language', 'review', 10)
+    print(sample)
+
+
+# Lowercase transformation - check effect of review casing on the language detection
+# %%
+# Convert review to lower case and then detect language again
+df_clean['review_lower'] = df_clean['review'].str.lower()
+
+# Confirm new feature creation with lower case texts
+print(df_clean.head())
+
+# %%
+# Perform language detection again
+df_clean['language_update'] = df_clean['review_lower'].apply(detect_language)
+
+# %%
+# View language_update distribution and compare with initial language distribution 
+language_count_update = df_clean['language_update'].value_counts()
+# Get the percentage of the updated language distribution
+language_percent = df_clean['language_update'].value_counts(normalize=True)*100
+
+# Combine the before and after language distribution
+comparison = pd.concat(
+    [language_count, language_percentages, language_count_update, language_percent],
+    axis=1
+)
+
+comparison.columns = ['Before','Before%', 'After', 'After%']
+comparison = comparison.fillna(0)
+# Make the before and after integer, and the percentages rounded
+comparison[['Before', 'After']] = comparison[['Before', 'After']].astype(int)
+comparison[['Before%', 'After%']] = (
+    comparison[['Before%', 'After%']].round(3)
+    )
+
+print(comparison)
+
+# %%
 # Create Language Summary Table
 language_summary = pd.DataFrame({
-    'Review Counts':language_count,
-    'Percentage':language_percentages
+    'Review Counts':language_count_update,
+    'Percentage':language_percent
 })
 print(language_summary)
 
 # Save this summary table as csv in outputs
 language_summary.to_excel('../outputs/language_summary.xlsx')
 
-# Validate detection samples by viewing random samples of reviews for each detected language
-# View reviews in English
-print(df_clean.loc[df_clean['language'] == 'en', 
-             'review'].sample(10, random_state=42))
+# %%
+# Before vs After language classification visualisation
+# focus on the other languages that changed (since the english language dominates the other language)
+focus_langs = ['ja', 'de', 'es', 'pl', 'zh', 'ml', 'ru']
 
-# View reviews in French
-print(df_clean.loc[df_clean['language']=='fr', 
-                   'review'].sample(10, random_state=42))
+# Use the above languages to plot a barchart
+comparison.loc[focus_langs][['Before', 'After']].plot(
+    kind='bar',
+    figsize=(10, 5)
+)
 
-# View reviews in German
-print(df_clean.loc[df_clean['language']=='de', 
-                   'review'].sample(10, random_state=42))
+plt.title('Language Distribution Before and After Normalisation Excluding English (lowercasing)')
+plt.xlabel('Language')
+plt.ylabel('Review Count')
+plt.xticks(rotation=0)
+plt.legend(title='')
+plt.tight_layout()
+plt.show()
 
-# View reviews in Spanish
-print(df_clean.loc[df_clean['language']=='es',
-         'review'].sample(10, random_state=42))
 
-# View reviews in Italian
-print(df_clean.loc[df_clean['language']=='it',
-                   'review'].sample(10, random_state=42))
+# %%
+# Multilingual Reclassification and Removal Decision
+#======================================
 
-# View reviews in Portuguese
-print(df_clean.loc[df_clean['language']=='pt',
-                   'review'].sample(10, random_state=42))
+# %% 
+# Call the function to view samples of the review again
+# Create a list of the updated detected languages
+langs = df_clean['language_update'].unique().tolist()
+
+# Call the function to view review samples
+for lang in langs:
+    print(f"\nReviews in {lang}")
+    sample_lower = view_review_samples(df_clean, lang, 'language_update', 'review_lower', 21)
+    print(sample_lower)
+
+# about 75% of the Polish (pl) detected reviews are English. 
+# %%
+# Reclassify to en, the three english review of the four reviews classified as pl
+# Create list of these
+pl_en = [14337, 16987, 20815]
+
+df_clean.loc[
+    df_clean.index.isin(pl_en),
+      'language_update'
+      ] = 'en'
+
 # Reclassify the reviews that are categorised as it and pt as these are actually es
-df_clean['language'] = df_clean['language'].replace({
-    'it': 'es',
-    'pt': 'es'
+df_clean['language_update'] = df_clean['language_update'].replace({
+    'ja': 'en',
+    'ru': 'en',
+
 })
 
-# Confirm this change
-print((df_clean['language'].value_counts(normalize=True))*100)
+# Remove the sv and cs as these are gibberish
+df_clean = df_clean[
+    ~df_clean['language_update'].isin(['sv', 'cs'])
+]
 
-# There seem to be duplicates in the review column. confirm this
-print(df_clean['review'].duplicated().sum())
+# Confirm reclassifications
+# Get language distribution
+language_update = df_clean['language_update'].value_counts()
+language_percent_update = df_clean['language_update'].value_counts(normalize=True)*100
 
-# Further confirmation of duplicate in review column
-print(df['review'].nunique())
+# Create Updated Language Summary Table after reclassifications
+language_summary_update = pd.DataFrame({
+    'Review Counts':language_update,
+    'Percentage':language_percent_update
+})
+print(language_summary_update)
+
+# Save this summary table as csv in outputs
+language_summary_update.to_excel('../outputs/language_summary_update.xlsx')
 
 #============================================================================================================
-# Language Detection Insight
-# Language detection identified English, French, German, and Spanish as the primary languages in the dataset.
-# Manual validation confirmed accurate classification for these major language groups. A small number of reviews
-# were initially classified as Italian and Portuguese; however, inspection revealed that these reviews were
-# actually Spanish and had likely been misclassified due to linguistic similarities. As these cases represented
-# less than 0.05% of the dataset, they were reassigned to Spanish and considered negligible. Additionally,
-# although no duplicate records were identified, review text analysis revealed a high degree of repetition,
-# suggesting the presence of commonly reused customer feedback phrases. These reviews were retained as they
-# represent distinct customer records.
+# Initial language detection identified 12 language groups, with English accounting for 99.64% of reviews.
+#
+# Manual validation revealed several language detection errors caused by uppercase English text and noisy 
+# reviews.
+#
+# Reviews were converted to lowercase and language detection was rerun, increasing English reviews from 20,979
+# to 21,006 and reducing Japanese classifications from 26 to 1.
+#
+# Further validation identified English reviews incorrectly classified as Japanese, Russian and Polish, which
+# were reclassified to English. Gibberish Swedish and Czech records were removed.
+#
+# Final dataset contains 21,011 English reviews (99.80%) and 42 genuine multilingual reviews across 7 language 
+# groups
 #============================================================================================================
 
 #============================================================================================================
 # %%
 # PREPROCESSING PIPELINE
 #============================================================================================================
+
+# Load NLP Models
+
+nlp_en = spacy.load('en_core_web_sm')
+nlp_it = spacy.load('it_core_news_sm')
+
+
+# Create the language model dictionary
+language_models = {
+    'en': nlp_en,
+    'it': nlp_it,
+}
 # Create a function to perform all of this steps (text cleaning) excluding tokenization
 def preprocess_text(text):
     text = clean(
@@ -317,15 +408,18 @@ def preprocess_text(text):
 
     return text
 
+# Create helper function to use language-specific model if available, otherwise fall back to English model
+def get_nlp_model(language):
+    return language_models.get(language, nlp_en)
+
+
 # Create function to perform multilingual tokenization, stop-word removal and Lemmaatization
 def process_text(row):
-    language = row['language']
+    language = row['language_update']
     text = row['clean_review']
-
-    if language not in language_models:
-        return []
     
-    doc = language_models[language](text)
+    
+    doc = get_nlp_model(language)(text)
     
     return [
         token.lemma_
@@ -337,12 +431,18 @@ def process_text(row):
 
 # Apply the above functions to the dataset 
 # Create a new feature of the cleaned review- clean_review
-df_clean['clean_review'] = df_clean['review'].apply(preprocess_text)
-# %%
+df_clean['clean_review'] = df_clean['review_lower'].apply(
+    preprocess_text
+    )
+
 # Create a new feature of the processed text
 # Create a new feature - tokens
-df_clean['processed_tokens'] = df_clean.apply(process_text, axis=1)
+df_clean['processed_tokens'] = df_clean.apply(
+    process_text, 
+    axis=1
+    )
 
+# %%
 # Vlidate columns creation by checking random samples of the created columns and review feature
 df_clean[['review', 'clean_review', 'processed_tokens']].sample(10, random_state=42)
 
@@ -350,18 +450,22 @@ df_clean[['review', 'clean_review', 'processed_tokens']].sample(10, random_state
 print(df_clean.head())
 
 # Check for missing values in new columns
-print(df_clean[['clean_review', 'processed_tokens', 'language']].isnull().sum())
+print(df_clean[['clean_review', 'processed_tokens', 'language_update']].isnull().sum())
 
 # Save preprocessed dataset to csv
 df_clean.to_csv('../data/processed_review.csv')
+
 # %%
 # Update data dictionary (adding the created columns alongside their description)
 # Create a list of the description of the initial data dictionary
 descriptions = data_dictionary_initial['Description'].to_list()
 
+
 # Update the description with the description of the newly created columns
 descriptions.extend([
     'Detected review language',
+    'Normalized review',
+    'updated review language after reclassification',
     'Cleaned review after normalisation',
     'Tokenized, lemmatized text with stop words removed'
 ])
@@ -381,8 +485,7 @@ data_dictionary_processed = pd.DataFrame({
 print(data_dictionary_processed)
 
 # Save updated data dictionary to excel
-data_dictionary_processed.to_excel('data_dictionary_processed',
-                                  index=False)
+data_dictionary_processed.to_excel('../outputs/data_dictionary_processed.xlsx')
 #--------------------------------------------------------------------------------------------------------------
 # A multilingual preprocessing pipeline was developed using language-specific spaCy models for English, French, 
 # German, and Spanish reviews. The pipeline performed text normalization, tokenization, stop-word removal, and 
@@ -390,8 +493,181 @@ data_dictionary_processed.to_excel('data_dictionary_processed',
 # baseline for sentiment analysis and will be reconsidered during model performance comparisons in later 
 # stages of the project.
 #-------------------------------------------------------------------------------------------------------------
-#==============================================================================================================
 
+#==============================================================================================================
+# EXPLORATORY DATA ANALYSIS
+#==============================================================================================================
+# %%
+# Univariate Analysis 
+#---------------------
+
+# Sentiment Distribution (Sentiment Balance Analysis)
+review_sentiment_dist = df_clean['sentiment'].value_counts()
+
+print(df_clean['sentiment'].value_counts())
+
+# Visualise review distribution across sentiment classes
+ax = review_sentiment_dist.plot(
+    kind='bar',
+    figsize=(10, 5)
+    )
+
+# Total number of reviews
+total_review = review_sentiment_dist.sum()
+
+# Add percentage label
+for p in ax.patches:
+    percentage = (p.get_height()/total_review)*100
+
+    ax.annotate(
+        f'{percentage:.1f}%',
+        (p.get_x() + p.get_width()/2, p.get_height()),
+        ha='center',
+        va='bottom'
+    )
+
+plt.title('Review Distribution Across Sentiment Classes')
+plt.xlabel('Sentiment')
+plt.ylabel('Count')
+plt.xticks(rotation=0)
+plt.show()
+
+#-------------------------------------------------------------------------------------------------------------
+# Sentiment distribution is heavily skewed towards negative reviews, with 68.2% of reviews classified as 
+# negative. Positive reviews account for 27.6%, while neutral reviews represent only 4.2% of the dataset, 
+# indicating a strong imbalance in customer sentiment.
+#-------------------------------------------------------------------------------------------------------------
+
+# Bivariate Analysis
+#---------------------
+# %%
+# Sentiment Distribution by Product Category
+product_sentiment_dist_pct = (pd.crosstab(
+    df_clean['product_category'],
+    df_clean['sentiment'],
+    normalize='index'
+)*100).round(2)
+
+print(product_sentiment_dist_pct)
+
+# Visualise sentiment distribution by product category
+ax = product_sentiment_dist_pct.plot(
+    kind='bar',
+    stacked=True,
+    figsize=(10,6)
+)
+
+plt.title('Sentiment Distribution by Product Category')
+plt.xlabel('Product Category')
+plt.ylabel('Percentage')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+#-------------------------------------------------------------------------------------------------------------
+# Home & Living recorded the highest negative sentiment (70.0%).
+# Fashion recorded the highest positive sentiment (29.4%).
+# Negative sentiment exceeded 66% in every category.
+# The variation across categories is relatively small, suggesting customer dissatisfaction is a platform-wide 
+# issue rather than being concentrated in a specific product category.
+#-------------------------------------------------------------------------------------------------------------
+
+# %%
+# Check review volume by country i.e Review distribution by country
+country_dist = df_clean['country'].value_counts()
+
+# View the top 20 country by review volume
+print(country_dist.head(20))
+
+# %%
+# Get the records of the top 10 countries by volume
+top_countries = df_clean['country'].value_counts().head(10).index
+
+# extract the records of the top 10 country by review volume
+df_top = df_clean[df_clean['country'].isin(top_countries)
+                  ]
+print(df_top)
+
+# Calculate the proportion of the total review that is from the top 10 countries
+top10_totalreview_pct = 
+
+# %%
+# Create Country-Sentiment Table
+country_sentiment_dist_pct = (pd.crosstab(
+    df_top['country'],
+    df_top['sentiment'],
+    normalize='index'
+)*100).round(2)
+
+print(country_sentiment_dist_pct)
+
+# Visualize distribution
+country_sentiment_dist_pct.plot(
+    kind='bar',
+    stacked=True,
+    figsize=(10, 5)
+)
+
+plt.title('Sentiment Distribution by Country (Top 10)')
+plt.xlabel('Country')
+plt.ylabel('Percentage')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show
+#-----------------------------------------------------------------------------------------------------------
+# There are a total of 19128 review records for the top 10 countries by volume
+# the top 10 countries are US, GB, CA, IN, IE, DK, NL, AU, DE, IT. 
+# Total reviews from this country makes up 
+# US and GB account for 78.8% of all reviews
+# Canada has the highest negative sentiment (77.7%)
+# Italy has the highest positive sentiment (56.0%)
+# Germany also shows relatively balanced sentiment (45.9% positive)
+# Most major markets exhibit predominantly negative sentiment
+#-----------------------------------------------------------------------------------------------------------
+
+# %%
+# Get top Positive and Negative keywords from cleaned review (tokenized review)
+# Convert tokenized list back to string and create a new feature of this strings
+df_clean['processed_texts'] = df_clean['processed_tokens'].apply(
+    lambda x: ' '.join(x)
+)
+
+# Confirm new feature creation
+print(df_clean['processed_texts'].head())
+
+# %%
+# Extract top negative words
+# Get the processed_texts column of the negative reviews
+negative_reviews = df_clean.loc[
+    df_clean['sentiment']=='Negative', 
+    'processed_texts'
+    ]
+
+# Confirm creation of series of negative_reviews 
+print(negative_reviews.head(10))
+
+# %%
+# Identify top 20 negative keywords from the negative texts column
+# Create the TF-IDF vectorizer and configure to keep only the top 20 most important words
+tfidf = TfidfVectorizer(
+    max_features=20
+)
+
+X = tfidf.fit_transform(negative_reviews)
+
+negative_keywords = pd.DataFrame({
+    'Keyword':tfidf.get_feature_names_out(),
+    'Score':X.sum(axis=0).A1
+}).sort_values(
+    'Score',
+    ascending=False
+)
+
+# View dataframe of the top 20 negative key words
+print(negative_keywords)
+
+# %%
+# Extract top positive words
 
 
 # %%

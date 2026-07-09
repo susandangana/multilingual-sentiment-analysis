@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
-import ast
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -139,30 +138,23 @@ plt.show
 # %%
 # Ngram Analysis
 #----------------
-# Convert tokenized list back to string and create a new feature of this strings
 
-# First we ensure processed_tokens columns which became a string instead of list of tokens when saved
-# to csv is treated properly as list of tokens when applying the join method
 
-df_clean['processed_tokens'] = (
-    df_clean['processed_tokens']
-    .apply(ast.literal_eval)
-)
+# %%
+# Check for missing value in the processed_texts column and remove if any
+print(df_clean['processed_texts'].isna().sum())
+# Locate the missing entry
+print(df_clean[df_clean['processed_texts'].isna()])
+# %%
+# Drop the entries where processed_texts columns have missing values
+df_clean = df_clean.dropna(subset=['processed_texts'])
 
-df_clean['processed_texts'] = df_clean['processed_tokens'].apply(
-    lambda x: ' '.join(x)
-)
-
-# Confirm new feature creation
-print(df_clean['processed_texts'].head())
+# Confirm drop
+print(df_clean['processed_texts'].isnull().sum())
 
 # Save the updated clean data
 df_clean.to_csv('../data/processed_reviews.csv',
                 index=False)
-
-# Check for missing value in the newly created column and remove if any
-df_clean['processed_texts'].isna().sum()
-
 # %%
 # Create a reusable ngram function
 def get_ngram_terms(

@@ -37,16 +37,6 @@ df_clean = pd.read_csv('../data/processed_reviews.csv')
 print(df_clean.head())
 
 # %%
-# Check for missing value in the newly created column and remove if any
-print(df_clean['processed_texts'].isna().sum())
-
-# Drop these missing values as they are blanks read as missing value when csv was read
-df_clean = df_clean.dropna(subset=['processed_texts'])
-
-# Confirm drop
-print(df_clean['processed_texts'].isna().sum())
-
-# %%
 # Data preparation
 # Seperate the feature (processed_text) from the target (sentiment)
 X = df_clean['processed_texts']
@@ -61,7 +51,14 @@ X_train, X_test, y_train, y_test = train_test_split(
     random_state=42,
     stratify=y
 )
+# %%
+streamlit_test_dataset = df_clean.drop(columns=['sentiment'])
+# %%
+streamlit_test_dataset.to_csv('streamlit_test_dataset.csv',
+                              index=False)
+# %%
 
+# %%
 # TF-IDF Vectorization
 tfidf = TfidfVectorizer(
     max_features=5000

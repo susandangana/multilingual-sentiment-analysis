@@ -277,7 +277,7 @@ cd ecommerce-sentiment-analysis
 ### Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### Install spaCy Language Models
